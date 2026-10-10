@@ -2,6 +2,10 @@
 
 AI-enabled HR management system: FastAPI backend, Next.js frontend, Supabase for sign-in (and optionally the database), Google Gemini for the AI features.
 
+## Demo
+
+Watch the walkthrough: [docs/demo.mp4](docs/demo.mp4)
+
 ## What is implemented
 
 - Employee directory with search, profiles, photos and document uploads
