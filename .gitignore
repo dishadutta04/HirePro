@@ -34,3 +34,9 @@ Thumbs.db
 # Build
 dist/
 build/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Next.js build info
+*.tsbuildinfo

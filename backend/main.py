@@ -24,8 +24,9 @@ from models.models import (
 from services.auth import (
     get_password_hash, verify_password, create_access_token,
     get_current_user, require_role,
+    supabase_enabled, send_supabase_invite, unusable_password_hash,
 )
-from services.s3_service import upload_file
+from services.storage import upload_file, file_url, prefetch, delete_file
 from ai.gemini_service import GeminiService
 
 gemini = GeminiService()
@@ -43,7 +44,12 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
+
+class InviteRequest(BaseModel):
+    email: EmailStr
+    full_name: str
     role: str = "employee"
+    employee_id: Optional[int] = None
 
 class EmployeeCreate(BaseModel):
     employee_code: str
@@ -178,7 +184,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,9 +204,21 @@ def startup():
     Base.metadata.create_all(bind=engine)
     db = next(get_db())
     try:
-        _seed_data(db)
+        if settings.SEED_DEMO_DATA:
+            _seed_data(db)
+        else:
+            _bootstrap_admin(db)
     finally:
         db.close()
+
+
+def _bootstrap_admin(db: Session):
+    """Start from zero: on an empty database, create only the first admin (INITIAL_ADMIN_EMAIL)."""
+    if db.query(User).first() is not None or not settings.INITIAL_ADMIN_EMAIL:
+        return
+    db.add(User(email=settings.INITIAL_ADMIN_EMAIL, hashed_password=unusable_password_hash(),
+                full_name=settings.INITIAL_ADMIN_NAME, role="admin"))
+    db.commit()
 
 
 def _seed_data(db: Session):
@@ -539,8 +557,14 @@ def health_check():
 # AUTH ROUTES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@app.get("/api/auth/config")
+def auth_config():
+    return {"provider": "supabase" if supabase_enabled() else "local"}
+
 @app.post("/api/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
+    if supabase_enabled():
+        raise HTTPException(status_code=400, detail="Sign in with Supabase from the HireFlow app")
     user = db.query(User).filter(User.email == req.email).first()
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -554,11 +578,14 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/register")
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    # Self sign-up always creates a plain employee; only admins can grant other roles.
+    if supabase_enabled():
+        raise HTTPException(status_code=403, detail="Sign-up is invite-only. Ask an admin to invite you.")
     if db.query(User).filter(User.email == req.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     user = User(
         email=req.email, hashed_password=get_password_hash(req.password),
-        full_name=req.full_name, role=req.role,
+        full_name=req.full_name, role="employee",
     )
     db.add(user)
     db.commit()
@@ -585,6 +612,50 @@ def get_me(current_user: User = Depends(get_current_user), db: Session = Depends
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ACCESS RULES
+# Admins and managers run HR workflows for everyone; employees only see their own records.
+# Payroll is stricter: only admins see other people's salaries.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+MANAGER_ROLES = ("admin", "manager")
+
+
+def _parse_ai_json(raw):
+    """Gemini often wraps JSON in ```json fences; returns the parsed value, or None for plain text."""
+    if not isinstance(raw, str):
+        return raw
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        text = text.rsplit("```", 1)[0]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _is_manager(user: User) -> bool:
+    return user.role in MANAGER_ROLES
+
+
+def _check_self_or_manager(user: User, employee_id: Optional[int]):
+    """Employees may only touch their own records; admins and managers may touch anyone's."""
+    if _is_manager(user):
+        return
+    if employee_id is None or employee_id != user.employee_id:
+        raise HTTPException(status_code=403, detail="You can only access your own records")
+
+
+def _own_employee_id(user: User, requested: Optional[int]) -> int:
+    """For lists that non-managers may only see for themselves: pins the filter to their own id."""
+    if not user.employee_id:
+        raise HTTPException(status_code=403, detail="No employee profile is linked to your account")
+    if requested is not None and requested != user.employee_id:
+        raise HTTPException(status_code=403, detail="You can only access your own records")
+    return user.employee_id
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # EMPLOYEE ROUTES
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -600,10 +671,12 @@ def _employee_to_dict(emp: Employee) -> dict:
         "employment_type": emp.employment_type,
         "date_of_joining": emp.date_of_joining.isoformat() if emp.date_of_joining else None,
         "date_of_leaving": emp.date_of_leaving.isoformat() if emp.date_of_leaving else None,
-        "manager_id": emp.manager_id, "salary": emp.salary,
+        "manager_id": emp.manager_id,
+        "manager_name": f"{emp.manager.first_name} {emp.manager.last_name}" if emp.manager else None,
+        "salary": emp.salary,
         "skills": emp.skills, "bio": emp.bio,
         "status": emp.status,
-        "profile_picture": emp.profile_picture,
+        "profile_picture": file_url(emp.profile_picture),
         "created_at": emp.created_at.isoformat() if emp.created_at else None,
         "updated_at": emp.updated_at.isoformat() if emp.updated_at else None,
     }
@@ -615,7 +688,7 @@ def list_employees(
     search: Optional[str] = None,
     skip: int = 0, limit: int = 50,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(*MANAGER_ROLES)),
 ):
     q = db.query(Employee)
     if department:
@@ -630,11 +703,13 @@ def list_employees(
         )
     total = q.count()
     employees = q.offset(skip).limit(limit).all()
+    prefetch(e.profile_picture for e in employees)
     return {"total": total, "employees": [_employee_to_dict(e) for e in employees]}
 
 @app.get("/api/employees/{employee_id}")
 def get_employee(employee_id: int, db: Session = Depends(get_db),
                  current_user: User = Depends(get_current_user)):
+    _check_self_or_manager(current_user, employee_id)
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -687,6 +762,7 @@ def delete_employee(employee_id: int, db: Session = Depends(get_db),
 @app.post("/api/employees/{employee_id}/generate-bio")
 def generate_bio(employee_id: int, db: Session = Depends(get_db),
                  current_user: User = Depends(get_current_user)):
+    _check_self_or_manager(current_user, employee_id)
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -718,13 +794,15 @@ def detect_duplicates(db: Session = Depends(get_db),
 async def upload_profile_image(employee_id: int, file: UploadFile = File(...),
                                db: Session = Depends(get_db),
                                current_user: User = Depends(get_current_user)):
+    _check_self_or_manager(current_user, employee_id)
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
-    url = await upload_file(file, "profiles")
-    emp.profile_picture = url
+    ref = await upload_file(file, "profiles")
+    old, emp.profile_picture = emp.profile_picture, ref
     db.commit()
-    return {"image_url": url}
+    delete_file(old)
+    return {"image_url": file_url(ref)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -737,15 +815,20 @@ def list_documents(
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
     q = db.query(Document)
-    if employee_id:
+    if not _is_manager(current_user):
+        # Own documents plus company policies.
+        own = _own_employee_id(current_user, employee_id)
+        q = q.filter((Document.employee_id == own) | (Document.is_policy == True))  # noqa: E712
+    elif employee_id:
         q = q.filter(Document.employee_id == employee_id)
     if doc_type:
         q = q.filter(Document.document_type == doc_type)
     docs = q.order_by(Document.uploaded_at.desc()).all()
+    prefetch(d.file_url for d in docs)
     return [{
         "id": d.id, "employee_id": d.employee_id,
         "document_name": d.document_name, "document_type": d.document_type,
-        "file_url": d.file_url, "file_size": d.file_size,
+        "file_url": file_url(d.file_url), "file_size": d.file_size,
         "is_policy": d.is_policy,
         "uploaded_at": d.uploaded_at.isoformat() if d.uploaded_at else None,
     } for d in docs]
@@ -761,6 +844,10 @@ async def upload_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not _is_manager(current_user):
+        if is_policy:
+            raise HTTPException(status_code=403, detail="Only admins and managers can publish policies")
+        _check_self_or_manager(current_user, employee_id)
     url = await upload_file(file, f"documents/{document_type}")
     doc = Document(
         employee_id=employee_id, document_name=document_name,
@@ -772,7 +859,7 @@ async def upload_document(
     db.refresh(doc)
     return {
         "id": doc.id, "document_name": doc.document_name,
-        "document_type": doc.document_type, "file_url": doc.file_url,
+        "document_type": doc.document_type, "file_url": file_url(doc.file_url),
         "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
     }
 
@@ -782,8 +869,10 @@ def delete_document(doc_id: int, db: Session = Depends(get_db),
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    ref = doc.file_url
     db.delete(doc)
     db.commit()
+    delete_file(ref)
     return {"message": "Document deleted"}
 
 
@@ -804,17 +893,18 @@ def _job_to_dict(job: JobPosting, include_candidates: bool = False) -> dict:
         "candidate_count": len(job.candidates),
     }
     if include_candidates:
+        prefetch(c.resume_url for c in job.candidates)
         d["candidates"] = [{
             "id": c.id, "name": c.name, "email": c.email, "phone": c.phone,
             "stage": c.stage, "score": c.score, "ai_summary": c.ai_summary,
-            "resume_url": c.resume_url,
+            "resume_url": file_url(c.resume_url),
             "applied_at": c.applied_at.isoformat() if c.applied_at else None,
         } for c in job.candidates]
     return d
 
 @app.get("/api/jobs")
 def list_jobs(status: Optional[str] = None, db: Session = Depends(get_db),
-              current_user: User = Depends(get_current_user)):
+              current_user: User = Depends(require_role(*MANAGER_ROLES))):
     q = db.query(JobPosting)
     if status:
         q = q.filter(JobPosting.status == status)
@@ -823,7 +913,7 @@ def list_jobs(status: Optional[str] = None, db: Session = Depends(get_db),
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: int, db: Session = Depends(get_db),
-            current_user: User = Depends(get_current_user)):
+            current_user: User = Depends(require_role(*MANAGER_ROLES))):
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -884,10 +974,11 @@ async def upload_resume(job_id: int, candidate_id: int, file: UploadFile = File(
     candidate = db.query(Candidate).filter(Candidate.id == candidate_id, Candidate.job_id == job_id).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
-    url = await upload_file(file, "resumes")
-    candidate.resume_url = url
+    ref = await upload_file(file, "resumes")
+    old, candidate.resume_url = candidate.resume_url, ref
     db.commit()
-    return {"resume_url": url}
+    delete_file(old)
+    return {"resume_url": file_url(ref)}
 
 @app.post("/api/jobs/{job_id}/candidates/{candidate_id}/score")
 def score_candidate(job_id: int, candidate_id: int, db: Session = Depends(get_db),
@@ -949,11 +1040,7 @@ def compare_candidates(job_id: int, db: Session = Depends(get_db),
     } for c in candidates], default=str)
 
     job_desc = f"{job.title}\n{job.description}\nRequirements: {job.requirements or ''}"
-    try:
-        raw = gemini.compare_candidates(candidates_data, job_desc)
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
-        parsed = None
+    parsed = _parse_ai_json(gemini.compare_candidates(candidates_data, job_desc))
 
     if isinstance(parsed, dict):
         result_candidates = parsed.get("candidates") or parsed.get("comparison") or []
@@ -982,6 +1069,8 @@ def list_leaves(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if not _is_manager(current_user):
+        employee_id = _own_employee_id(current_user, employee_id)
     q = db.query(LeaveRequest)
     if employee_id:
         q = q.filter(LeaveRequest.employee_id == employee_id)
@@ -1051,6 +1140,7 @@ def action_leave(leave_id: int, req: LeaveActionRequest, db: Session = Depends(g
 def get_leave_balance(employee_id: int, year: int = Query(default=2026),
                       db: Session = Depends(get_db),
                       current_user: User = Depends(get_current_user)):
+    _check_self_or_manager(current_user, employee_id)
     balances = db.query(LeaveBalance).filter(
         LeaveBalance.employee_id == employee_id, LeaveBalance.year == year
     ).all()
@@ -1089,6 +1179,8 @@ def list_attendance(
     from_date: Optional[date] = None, to_date: Optional[date] = None,
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
+    if not _is_manager(current_user):
+        employee_id = _own_employee_id(current_user, employee_id)
     q = db.query(Attendance)
     if employee_id:
         q = q.filter(Attendance.employee_id == employee_id)
@@ -1212,20 +1304,26 @@ def activate_review_cycle(cycle_id: int, db: Session = Depends(get_db),
 @app.get("/api/reviews/cycles/{cycle_id}/reviews")
 def list_reviews_for_cycle(cycle_id: int, db: Session = Depends(get_db),
                            current_user: User = Depends(get_current_user)):
-    reviews = db.query(PerformanceReview).filter(PerformanceReview.cycle_id == cycle_id).all()
+    q = db.query(PerformanceReview).filter(PerformanceReview.cycle_id == cycle_id)
+    if not _is_manager(current_user):
+        q = q.filter(PerformanceReview.employee_id == _own_employee_id(current_user, None))
+    reviews = q.all()
     result = []
     for r in reviews:
         emp = db.query(Employee).filter(Employee.id == r.employee_id).first()
         ai_summary_value = r.ai_summary
         if isinstance(ai_summary_value, str) and ai_summary_value.strip():
-            try:
-                ai_summary_value = json.loads(ai_summary_value)
-            except json.JSONDecodeError:
+            parsed = _parse_ai_json(ai_summary_value)
+            if isinstance(parsed, dict):
                 ai_summary_value = {
-                    "summary": ai_summary_value,
-                    "flags": [],
-                    "suggestions": [],
+                    "summary": parsed.get("summary") or "",
+                    "flags": parsed.get("flags") or [],
+                    "suggestions": parsed.get("suggestions") or parsed.get("recommendations") or [],
                 }
+            else:
+                ai_summary_value = {"summary": ai_summary_value, "flags": [], "suggestions": []}
+        else:
+            ai_summary_value = None
         result.append({
             "id": r.id, "cycle_id": r.cycle_id, "employee_id": r.employee_id,
             "employee_name": f"{emp.first_name} {emp.last_name}" if emp else "Unknown",
@@ -1246,6 +1344,9 @@ def submit_self_assessment(review_id: int, req: SelfAssessmentSubmit,
     review = db.query(PerformanceReview).filter(PerformanceReview.id == review_id).first()
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
+    # A self-assessment is written by the person being reviewed, never on their behalf.
+    if review.employee_id != current_user.employee_id:
+        raise HTTPException(status_code=403, detail="You can only submit your own self-assessment")
     review.self_rating = req.self_rating
     review.self_comments = req.self_comments
     review.achievements = req.achievements
@@ -1310,23 +1411,16 @@ def generate_review_summary_endpoint(review_id: int, db: Session = Depends(get_d
         "overall_rating": review.overall_rating,
     })
 
-    try:
-        raw = gemini.generate_review_summary(review_data)
-    except Exception:
-        raw = "Performance is stable overall. Continue with focused growth actions."
+    raw = gemini.generate_review_summary(review_data)
 
     payload = None
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                payload = {
-                    "summary": parsed.get("summary") or raw,
-                    "flags": parsed.get("flags") or [],
-                    "suggestions": parsed.get("suggestions") or parsed.get("recommendations") or [],
-                }
-        except json.JSONDecodeError:
-            pass
+    parsed = _parse_ai_json(raw)
+    if isinstance(parsed, dict):
+        payload = {
+            "summary": parsed.get("summary") or raw,
+            "flags": parsed.get("flags") or [],
+            "suggestions": parsed.get("suggestions") or parsed.get("recommendations") or [],
+        }
 
     if payload is None:
         payload = {
@@ -1385,6 +1479,7 @@ def assign_onboarding(employee_id: int, checklist_id: int, db: Session = Depends
 @app.get("/api/onboarding/progress/{employee_id}")
 def get_onboarding_progress(employee_id: int, db: Session = Depends(get_db),
                             current_user: User = Depends(get_current_user)):
+    _check_self_or_manager(current_user, employee_id)
     records = db.query(OnboardingProgress).filter(OnboardingProgress.employee_id == employee_id).all()
     result = []
     for p in records:
@@ -1407,6 +1502,7 @@ def update_onboarding_progress(progress_id: int, req: ChecklistProgressUpdate,
     progress = db.query(OnboardingProgress).filter(OnboardingProgress.id == progress_id).first()
     if not progress:
         raise HTTPException(status_code=404, detail="Progress record not found")
+    _check_self_or_manager(current_user, progress.employee_id)
     progress.completed_items = req.completed_items
     # Check completion
     cl = db.query(OnboardingChecklist).filter(OnboardingChecklist.id == progress.checklist_id).first()
@@ -1506,6 +1602,8 @@ def list_payroll(
     employee_id: Optional[int] = None, month: Optional[int] = None, year: Optional[int] = None,
     db: Session = Depends(get_db), current_user: User = Depends(get_current_user),
 ):
+    if current_user.role != "admin":
+        employee_id = _own_employee_id(current_user, employee_id)
     q = db.query(PayrollRecord)
     if employee_id:
         q = q.filter(PayrollRecord.employee_id == employee_id)
@@ -1676,10 +1774,31 @@ def list_users(db: Session = Depends(get_db),
         "created_at": u.created_at.isoformat() if u.created_at else None,
     } for u in users]
 
+@app.post("/api/users/invite")
+def invite_user(req: InviteRequest, db: Session = Depends(get_db),
+                current_user: User = Depends(require_role("admin"))):
+    if req.role not in {r.value for r in UserRole}:
+        raise HTTPException(status_code=400, detail="Unknown role")
+    email = req.email.lower()
+    if db.query(User).filter(func.lower(User.email) == email).first():
+        raise HTTPException(status_code=400, detail="A user with this email already exists")
+    if req.employee_id and not db.query(Employee).filter(Employee.id == req.employee_id).first():
+        raise HTTPException(status_code=404, detail="Employee not found")
+    send_supabase_invite(email, req.full_name)
+    user = User(email=email, hashed_password=unusable_password_hash(), full_name=req.full_name,
+                role=req.role, employee_id=req.employee_id)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"id": user.id, "email": user.email, "full_name": user.full_name,
+            "role": user.role, "employee_id": user.employee_id}
+
 @app.put("/api/users/{user_id}/role")
 def update_user_role(user_id: int, role: str = Query(...),
                      db: Session = Depends(get_db),
                      current_user: User = Depends(require_role("admin"))):
+    if role not in {r.value for r in UserRole}:
+        raise HTTPException(status_code=400, detail="Unknown role")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1693,7 +1812,19 @@ def deactivate_user(user_id: int, db: Session = Depends(get_db),
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="You can't deactivate your own account")
     user.is_active = False
+    db.commit()
+    return {"id": user.id, "is_active": user.is_active}
+
+@app.put("/api/users/{user_id}/activate")
+def activate_user(user_id: int, db: Session = Depends(get_db),
+                  current_user: User = Depends(require_role("admin"))):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = True
     db.commit()
     return {"id": user.id, "is_active": user.is_active}
 

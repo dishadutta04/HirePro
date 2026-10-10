@@ -1,14 +1,39 @@
-import google.generativeai as genai
+from fastapi import HTTPException
+from google import genai
+from google.genai import errors
+
 from config import settings
 
 
 class GeminiService:
     def __init__(self):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
+        self.model = settings.GEMINI_MODEL
+        self._client = None
+
+    @property
+    def client(self) -> genai.Client:
+        # Created on first use, so the app starts (and non-AI features work) without a key.
+        if self._client is None:
+            if not settings.GEMINI_API_KEY:
+                raise HTTPException(status_code=503, detail="AI isn't set up yet: add GEMINI_API_KEY to backend/.env and restart the backend.")
+            self._client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        return self._client
 
     def _generate(self, prompt: str) -> str:
-        response = self.model.generate_content(prompt)
+        try:
+            response = self.client.models.generate_content(model=self.model, contents=prompt)
+        except errors.APIError as e:
+            if e.code in (401, 403) or (e.code == 400 and "API key" in (e.message or "")):
+                detail = "Gemini rejected the API key. Check GEMINI_API_KEY in backend/.env."
+            elif e.code == 404:
+                detail = f"Gemini model '{self.model}' isn't available. Set GEMINI_MODEL in backend/.env to a current model."
+            elif e.code == 429:
+                detail = "Gemini rate limit or quota reached. Wait a minute and try again."
+            else:
+                detail = f"Gemini error ({e.code}): {e.message}"
+            raise HTTPException(status_code=502, detail=detail)
+        if not response.text:
+            raise HTTPException(status_code=502, detail="Gemini returned an empty answer (it may have been blocked by safety filters). Try again.")
         return response.text
 
     def generate_employee_bio(self, name: str, designation: str, department: str, skills: str) -> str:

@@ -8,10 +8,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    environment:
-      - SECRET_KEY=${SECRET_KEY:-hireflow-super-secret-key-2026}
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///./hrms.db}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - ./backend/.env
     volumes:
       - backend-data:/app/data
       - backend-uploads:/app/uploads
@@ -23,14 +21,18 @@ services:
       retries: 3
 
   # ── Frontend App ───────────────────────────────────────────
+  # NEXT_PUBLIC_* values are baked in at build time and used by the browser,
+  # so the API URL must be one the browser can reach (not the compose service name).
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
     depends_on:
       backend:
         condition: service_healthy

@@ -1,0 +1,465 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * HireFlow design system: black + white with a light-purple accent, in a frosted macOS window.
+ * Light mode is white glass on a lavender desk; dark mode is graphite glass on a black desk with a purple glow.
+ */
+:root {
+  --desk: #efeaff;
+  --desk-2: #ffffff;
+  --desk-glow-1: rgba(167, 139, 250, 0.45);
+  --desk-glow-2: rgba(196, 181, 253, 0.55);
+  --window: rgba(255, 255, 255, 0.74);
+  --titlebar: rgba(250, 248, 255, 0.7);
+  --sidebar: rgba(246, 243, 255, 0.66);
+  --card: #ffffff;
+  --card-soft: #f6f3fe;
+  --line: rgba(40, 20, 90, 0.08);
+  --line-strong: rgba(40, 20, 90, 0.15);
+  --fg: #0c0b12;
+  --fg-2: #5e5a72;
+  --fg-3: #a19cb6;
+  --hover: rgba(124, 92, 246, 0.07);
+  --selected: rgba(124, 92, 246, 0.12);
+  --primary: #0c0b12;
+  --primary-fg: #ffffff;
+  --accent: #8b5cf6;
+  --accent-strong: #7c3aed;
+  --accent-soft: #efe9ff;
+  --accent-fg: #ffffff;
+  --accent-gradient: linear-gradient(135deg, #c4b5fd 0%, #a78bfa 45%, #8b5cf6 100%);
+  --ok: #22a06b;
+  --warn: #e5a00d;
+  --bad: #e5484d;
+  --shadow-card: 0 1px 2px rgba(40, 20, 90, 0.04), 0 6px 20px rgba(40, 20, 90, 0.06);
+  --shadow-window: 0 40px 100px rgba(76, 29, 149, 0.22), 0 0 0 0.5px rgba(40, 20, 90, 0.16);
+  --ring: 0 0 0 3px rgba(139, 92, 246, 0.25);
+  --logo-tile: #0c0b12;
+  --logo-ink: #ffffff;
+  --logo-flow-text: #7c3aed;
+  color-scheme: light;
+}
+
+html.dark {
+  --desk: #050507;
+  --desk-2: #0d0b14;
+  --desk-glow-1: rgba(139, 92, 246, 0.32);
+  --desk-glow-2: rgba(196, 181, 253, 0.12);
+  --window: rgba(20, 19, 27, 0.8);
+  --titlebar: rgba(26, 24, 35, 0.72);
+  --sidebar: rgba(14, 13, 20, 0.62);
+  --card: #1a1922;
+  --card-soft: #22202c;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --fg: #f7f6fb;
+  --fg-2: #a9a5bb;
+  --fg-3: #6f6a84;
+  --hover: rgba(196, 181, 253, 0.07);
+  --selected: rgba(196, 181, 253, 0.13);
+  --primary: #f7f6fb;
+  --primary-fg: #0c0b12;
+  --accent: #c4b5fd;
+  --accent-strong: #a78bfa;
+  --accent-soft: rgba(196, 181, 253, 0.12);
+  --accent-fg: #0c0b12;
+  --accent-gradient: linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 45%, #a78bfa 100%);
+  --ok: #3ecf8e;
+  --warn: #f5b83d;
+  --bad: #ff6369;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-window: 0 40px 120px rgba(0, 0, 0, 0.7), 0 0 80px rgba(139, 92, 246, 0.12), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  --ring: 0 0 0 3px rgba(196, 181, 253, 0.25);
+  --logo-tile: #f7f6fb;
+  --logo-ink: #0c0b12;
+  --logo-flow-text: #c4b5fd;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--desk);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(139, 92, 246, 0.25);
+}
+
+@layer components {
+  /* The "desktop" behind the window: soft purple light like a macOS wallpaper. */
+  .desk {
+    background:
+      radial-gradient(900px 600px at 88% 105%, var(--desk-glow-1), transparent 60%),
+      radial-gradient(800px 520px at 6% -8%, var(--desk-glow-2), transparent 62%),
+      radial-gradient(600px 400px at 45% 50%, var(--desk-glow-2), transparent 70%),
+      linear-gradient(160deg, var(--desk-2), var(--desk));
+    background-attachment: fixed;
+  }
+  .mac-window {
+    background: var(--window);
+    box-shadow: var(--shadow-window);
+    backdrop-filter: blur(40px) saturate(1.6);
+    -webkit-backdrop-filter: blur(40px) saturate(1.6);
+  }
+  /* Dialogs: same glass, but nearly opaque so forms stay readable over busy pages. */
+  .mac-sheet {
+    background: color-mix(in srgb, var(--card) 94%, transparent);
+  }
+  .mac-titlebar {
+    background: var(--titlebar);
+    border-bottom: 1px solid var(--line);
+  }
+  .mac-sidebar {
+    background: var(--sidebar);
+    border-right: 1px solid var(--line);
+  }
+  /* Traffic lights, with the glyphs that appear on hover like macOS. */
+  .mac-lights {
+    display: flex;
+    gap: 8px;
+  }
+  .mac-light {
+    position: relative;
+    height: 12px;
+    width: 12px;
+    border-radius: 999px;
+    box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+  }
+  .mac-light.close { background: #ff5f57; }
+  .mac-light.min { background: #febc2e; }
+  .mac-light.max { background: #28c840; }
+  .mac-lights:hover .mac-light::after {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1;
+    color: rgba(0, 0, 0, 0.55);
+  }
+  .mac-lights:hover .mac-light.close::after { content: "×"; }
+  .mac-lights:hover .mac-light.min::after { content: "−"; }
+  .mac-lights:hover .mac-light.max::after { content: "+"; }
+
+  .mac-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: var(--shadow-card);
+  }
+  .mac-glass {
+    background: color-mix(in srgb, var(--card) 62%, transparent);
+    border: 1px solid var(--line-strong);
+    border-radius: 16px;
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  }
+  .mac-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--fg-2);
+  }
+  .mac-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 9px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg);
+    transition: background 0.15s ease;
+  }
+  .mac-btn:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  .mac-btn:disabled {
+    opacity: 0.4;
+  }
+  .mac-btn-primary,
+  .mac-btn-accent {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 11px;
+    font-weight: 600;
+    transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.2s ease;
+  }
+  .mac-btn-primary {
+    background: var(--primary);
+    color: var(--primary-fg);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 4px 14px rgba(12, 11, 18, 0.18);
+  }
+  .mac-btn-accent {
+    background: var(--accent-gradient);
+    color: #1b0d3d;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.45) inset, 0 6px 18px rgba(139, 92, 246, 0.35);
+  }
+  .mac-btn-primary:hover:not(:disabled),
+  .mac-btn-accent:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  .mac-btn-primary:active:not(:disabled),
+  .mac-btn-accent:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .mac-btn-primary:disabled,
+  .mac-btn-accent:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .mac-btn-outline {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 11px;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    color: var(--fg);
+    font-weight: 600;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .mac-btn-outline:hover:not(:disabled) {
+    background: var(--hover);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  }
+  .mac-btn-outline:disabled {
+    opacity: 0.4;
+  }
+  .mac-nav {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 10px;
+    border-radius: 9px;
+    padding: 6px 9px;
+    font-size: 13px;
+    color: var(--fg);
+    text-align: left;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .mac-nav:hover {
+    background: var(--hover);
+  }
+  .mac-nav[aria-current="page"] {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  html.dark .mac-nav[aria-current="page"] {
+    color: var(--accent);
+  }
+  .mac-chip {
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    padding: 4px 11px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-2);
+    background: var(--card);
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+  .mac-chip:hover {
+    color: var(--fg);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  }
+  .mac-chip[aria-pressed="true"] {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-fg);
+  }
+  .mac-input {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--line-strong);
+    background: var(--card-soft);
+    color: var(--fg);
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  }
+  .mac-input::placeholder {
+    color: var(--fg-3);
+  }
+  .mac-input:focus {
+    border-color: var(--accent);
+    background: var(--card);
+    box-shadow: var(--ring);
+  }
+  .mac-icon-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+  html.dark .mac-icon-tile {
+    color: var(--accent);
+  }
+  /* A panel that is always dark (login hero), whatever the theme. */
+  .hero-dark {
+    --logo-tile: #f7f6fb;
+    --logo-ink: #0c0b12;
+    --logo-flow-text: #c4b5fd;
+    --fg: #f7f6fb;
+    --fg-2: rgba(247, 246, 251, 0.66);
+    --fg-3: rgba(247, 246, 251, 0.4);
+    --card: #1a1922;
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --accent-soft: rgba(196, 181, 253, 0.14);
+    background:
+      radial-gradient(520px 380px at 90% 100%, rgba(139, 92, 246, 0.55), transparent 65%),
+      radial-gradient(420px 320px at 0% 0%, rgba(196, 181, 253, 0.28), transparent 65%),
+      #0c0b12;
+    color: var(--fg);
+  }
+  .bar-accent {
+    background: var(--accent-gradient);
+  }
+  .text-gradient {
+    background: var(--accent-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  html:not(.dark) .text-gradient {
+    background-image: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 50%, #6d28d9 100%);
+  }
+  .hero-dark .text-gradient {
+    background-image: linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 45%, #a78bfa 100%);
+  }
+  .masonry {
+    column-gap: 16px;
+  }
+  .masonry > * {
+    break-inside: avoid;
+    margin-bottom: 16px;
+  }
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* macOS-style window open: scale up from slightly smaller. */
+@keyframes windowIn {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(30px, -20px) scale(1.08); }
+}
+
+.animate-fade-in { animation: fadeIn 0.35s ease both; }
+.animate-window { animation: windowIn 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.05) both; }
+.animate-float { animation: float 6s ease-in-out infinite; }
+.animate-drift { animation: drift 14s ease-in-out infinite; }
+
+/* ---------- Logo ---------- */
+
+@keyframes barGrow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+@keyframes flowDraw {
+  from { stroke-dashoffset: 40; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes sparkPop {
+  0% { transform: scale(0) rotate(-45deg); opacity: 0; }
+  70% { transform: scale(1.25) rotate(10deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+@keyframes sparkPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.8); }
+}
+
+.logo-bar {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: barGrow 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.logo-flow {
+  stroke-dasharray: 40;
+  animation: flowDraw 0.6s ease 0.35s both;
+}
+.logo-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sparkPop 0.45s ease 0.8s both, sparkPulse 1.6s ease-in-out 1.3s infinite;
+}
+
+/* ---------- Splash ---------- */
+
+@keyframes dockBounce {
+  0% { transform: translateY(40px) scale(0.6); opacity: 0; }
+  45% { transform: translateY(-22px) scale(1.04); opacity: 1; }
+  65% { transform: translateY(0) scale(1); }
+  80% { transform: translateY(-7px); }
+  100% { transform: translateY(0); }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes load {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes splashOut {
+  to { opacity: 0; transform: scale(1.04); filter: blur(8px); }
+}
+
+.splash-icon { animation: dockBounce 1s cubic-bezier(0.3, 0.8, 0.4, 1) both; }
+.splash-rise { animation: rise 0.6s ease both; }
+.splash-load { transform-origin: left; animation: load 1.6s cubic-bezier(0.6, 0, 0.2, 1) 0.4s both; }
+.splash-out { animation: splashOut 0.45s ease forwards; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-window,
+  .animate-float,
+  .animate-drift,
+  .logo-bar,
+  .logo-flow,
+  .logo-spark,
+  .splash-icon,
+  .splash-rise,
+  .splash-load {
+    animation: none;
+  }
+}
